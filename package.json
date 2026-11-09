@@ -1,5 +1,5 @@
 {
-	"name": "gelement",
+	"name": "@styleeyes/gelement",
 	"version": "0.0.0",
 	"description": "Declarative, circuit-themed interactivity for React: wire components together with power and signals.",
 	"license": "MIT",

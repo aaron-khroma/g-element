@@ -17,16 +17,16 @@
 
 ## Status
 
-| Layer                                             | State          |
-| ------------------------------------------------- | -------------- |
-| `gelement/core`: the framework-free circuit store | 🚧 started     |
-| React parts and hooks                             | Planned (v0.1) |
-| Functional overlay (dev tool)                     | Planned        |
+| Layer                                                        | State          |
+| ------------------------------------------------------------ | -------------- |
+| `@styleeyes/gelement/core`: the framework-free circuit store | 🚧 started     |
+| React parts and hooks                                        | Planned (v0.1) |
+| Functional overlay (dev tool)                                | Planned        |
 
 ## Install
 
 ```sh
-npm install gelement
+npm install @styleeyes/gelement
 ```
 
 ## Development
