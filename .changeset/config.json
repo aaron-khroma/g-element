@@ -1,0 +1,9 @@
+{
+	"$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
+	"changelog": ["@changesets/changelog-github", { "repo": "aaron-khroma/gelement" }],
+	"commit": false,
+	"access": "public",
+	"baseBranch": "prime",
+	"updateInternalDependencies": "patch",
+	"ignore": []
+}
