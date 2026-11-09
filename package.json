@@ -48,10 +48,11 @@
 		"test:watch": "vitest",
 		"lint": "eslint . && prettier --check .",
 		"format": "prettier --write .",
-		"check": "npm run typecheck && npm run lint && npm run test && npm run build",
+		"check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run smoke",
 		"changeset": "changeset",
 		"release": "npm run build && changeset publish",
-		"prepublishOnly": "npm run build"
+		"prepublishOnly": "npm run build",
+		"smoke": "node -e \"import('./dist/index.js')\""
 	},
 	"peerDependencies": {
 		"react": "^19.0.0"
