@@ -17,16 +17,16 @@
 
 ## Status
 
-| Layer                                                        | State          |
-| ------------------------------------------------------------ | -------------- |
-| `@styleeyes/gelement/core`: the framework-free circuit store | 🚧 started     |
-| React parts and hooks                                        | Planned (v0.1) |
-| Functional overlay (dev tool)                                | Planned        |
+| Layer                                                         | State          |
+| ------------------------------------------------------------- | -------------- |
+| `@styleeyes/g-element/core`: the framework-free circuit store | 🚧 started     |
+| React parts and hooks                                         | Planned (v0.1) |
+| Functional overlay (dev tool)                                 | Planned        |
 
 ## Install
 
 ```sh
-npm install @styleeyes/gelement
+npm install @styleeyes/g-element
 ```
 
 ## Development

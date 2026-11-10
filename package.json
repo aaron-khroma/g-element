@@ -1,14 +1,14 @@
 {
-	"name": "@styleeyes/gelement",
+	"name": "@styleeyes/g-element",
 	"version": "0.0.0",
 	"description": "Declarative, circuit-themed interactivity for React: wire components together with power and signals.",
 	"license": "MIT",
 	"author": "Aaron Clement",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/aaron-khroma/gelement.git"
+		"url": "git+https://github.com/aaron-khroma/g-element.git"
 	},
-	"homepage": "https://github.com/aaron-khroma/gelement#readme",
+	"homepage": "https://github.com/aaron-khroma/g-element#readme",
 	"keywords": [
 		"react",
 		"components",
