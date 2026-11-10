@@ -24,13 +24,13 @@
 
 ## 2. Architecture
 
-GElement is a **standalone React library** in its own public GitHub repo (`aaron-khroma/gelement`), published to npm. It knows nothing about Gridiv or the land. Projects that need more extend it:
+GElement is a **standalone React library** in its own public GitHub repo (`aaron-khroma/g-element`), published to npm. It knows nothing about Gridiv or the land. Projects that need more extend it:
 
 - **`GridivElement`** lives inside Gridiv, and exists only if Gridiv turns out to need gridmap-aware behavior.
 - **`MElement`** lives in the Style Eyes site repo, because its 3D block matrix is bespoke (see §5, an example of extending GElement).
 
 ```
-gelement (npm package)
+@styleeyes/g-element (npm package)
 ├── core/      Circuit store: wires, buses, parts, power & signal state, edges.
 │              Plain TypeScript, no DOM, no React. Fully unit-testable.
 ├── react/     <GCircuit>, <GSwitch/>, <GTriode/>… plus hooks: usePower(wire), useSignal(wire), useEdge(wire)
@@ -143,6 +143,6 @@ A `<g-switch>` on a PHP page and a `<GSwitch>` in React would drive the same kin
 
 ## 6. Design decisions
 
-1. **Packaging:** GElement is a standalone React library on npm (`gelement`). Gridiv extends it with `GridivElement` only if needed. `MElement` lives in the landpage repo.
+1. **Packaging:** GElement is a standalone React library on npm as `@styleeyes/g-element`. The hyphen keeps the name reading as "G element" rather than "gel". Gridiv extends it with `GridivElement` only if needed. `MElement` lives in the landpage repo.
 2. **Custom-element tier:** not in v1. `core/` stays React-free so the tier can be added later (§2a).
 3. **Wire scope:** wires are global. Wires declared inside a gridmap are namespaced by the gridmap's name (`gridmap-name/wire`), so two gridmaps on one page can't collide. Un-namespaced wires (`theme`, `tagline`) belong to the host app, and a gridmap may connect to them deliberately.

@@ -1,4 +1,4 @@
-import { createCircuit } from './circuit';
+import { createCircuit } from './circuit.js';
 
 describe('createCircuit', () => {
 	it('reads unknown wires as unpowered with no signal', () => {
