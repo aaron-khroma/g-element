@@ -34,8 +34,10 @@ npm install @styleeyes/g-element
 ```sh
 nvm use          # Node 26
 npm install
-npm run check    # typecheck, lint, test, build
+npm run check    # typecheck, lint, test, build, smoke
 ```
+
+**How it's built:** the [developer guide](docs/dev/README.md) maps the repo, explains each system and the concepts behind it, and links the official docs.
 
 **Releases** use [Changesets](https://github.com/changesets/changesets). Add a changeset with `npm run changeset` in any PR that changes published behavior. Merging to `prime` opens a release PR, and merging that publishes to npm.
 
