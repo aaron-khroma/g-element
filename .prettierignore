@@ -2,3 +2,7 @@ dist
 coverage
 package-lock.json
 .changeset/*.md
+# Local dot-folders (editor and tool scratch space). Tracked ones are listed back in.
+.*/
+!.github/
+!.changeset/
