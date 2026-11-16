@@ -188,6 +188,17 @@ describe('delayed release', () => {
 		expect(circuit.read('menu').powered).toBe(false);
 	});
 
+	it('cancels a waiting delay when released at once, so it never removes a later driver', () => {
+		const circuit = createCircuit();
+		const hover = Symbol('hover');
+		circuit.drive('menu', hover);
+		circuit.release('menu', hover, { delay: 300 });
+		circuit.release('menu', hover);
+		circuit.drive('menu', hover);
+		vi.advanceTimersByTime(300);
+		expect(circuit.read('menu').powered).toBe(true);
+	});
+
 	it('removes a cut driver at once, so asserting it again counts', () => {
 		const circuit = createCircuit();
 		const hover = Symbol('hover');
