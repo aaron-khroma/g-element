@@ -6,10 +6,10 @@ What GElement _is_ and how its API is designed lives in [SPEC.md](../SPEC.md); s
 
 ## Guides
 
-| Guide                                 | Covers                                                                     |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| [The circuit store](circuit-store.md) | `createCircuit()` line by line: private state, wires, and subscriptions    |
-| [Publishing to npm](publishing.md)    | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing |
+| Guide                                 | Covers                                                                       |
+| ------------------------------------- | ---------------------------------------------------------------------------- |
+| [The circuit store](circuit-store.md) | `createCircuit()`: wires, drivers, buses, and how probes are told of changes |
+| [Publishing to npm](publishing.md)    | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing   |
 
 Add a guide when a system gets big enough to need a walkthrough, and link it from the map below.
 
@@ -21,7 +21,7 @@ g-element/
 │   ├── index.ts              Root entry point: re-exports everything public
 │   └── core/                 The circuit store: plain TypeScript, no React, no DOM
 │       ├── index.ts          The `@styleeyes/g-element/core` entry point
-│       ├── circuit.ts        createCircuit(): wires, power, signal, subscribers
+│       ├── circuit.ts        createCircuit(): wires, drivers, buses, probes
 │       └── circuit.test.ts   Its unit tests
 ├── dist/                     Build output (git-ignored): .js, .d.ts, and source maps
 ├── docs/                     SPEC.md (the design) and this guide
@@ -57,7 +57,7 @@ What other projects can import is decided in `package.json`, not by which files 
 
 ### The circuit store: `src/core/`
 
-The single source of truth for every wire's power and signal. It's framework-free, so the React layer (and maybe someday a custom-element layer) is a thin adapter over it ([SPEC.md §2a](../SPEC.md#2a-how-the-tiers-would-work-and-why-v1-is-react-only)). Concepts: closures for private state, `Map` and `Set`, immutable snapshots, and the subscribe/unsubscribe pattern React's `useSyncExternalStore` expects.
+The single source of truth for every wire's power and signal. It's framework-free, so the React layer (and maybe someday a custom-element layer) is a thin adapter over it ([SPEC.md §2a](../SPEC.md#2a-how-the-tiers-would-work-and-why-v1-is-react-only)). Concepts: closures for private state, `Map`, `Set`, and `Symbol` keys, frozen measurements, batched notifications, injectable timers, and the attach-and-detach pattern React's `useSyncExternalStore` expects.
 Guide: [The circuit store](circuit-store.md)
 
 ### Tests: `*.test.ts`, `vitest.config.ts`
@@ -65,7 +65,7 @@ Guide: [The circuit store](circuit-store.md)
 - **Vitest** runs the tests in `src/**/*.test.ts`, next to the code they test.
 - **`globals: true`** makes `describe`, `it`, `expect`, and `vi` available without importing them; `"types": ["vitest/globals"]` in `tsconfig.json` tells TypeScript about them.
 - **`environment: 'jsdom'`** gives tests a simulated browser DOM, ready for the React parts.
-- **`vi.fn()`** makes a spy: a stand-in function that records its calls, so a test can assert `toHaveBeenCalledTimes(1)`. See the subscription test in [`circuit.test.ts`](../../src/core/circuit.test.ts).
+- **`vi.fn()`** makes a spy: a stand-in function that records its calls, so a test can assert `toHaveBeenCalledTimes(1)`. See the notification tests in [`circuit.test.ts`](../../src/core/circuit.test.ts).
 
 Docs: [Vitest guide](https://vitest.dev/guide/), [config](https://vitest.dev/config/), [`vi`](https://vitest.dev/api/vi.html)
 
