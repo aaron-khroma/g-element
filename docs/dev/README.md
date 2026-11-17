@@ -6,10 +6,11 @@ What GElement _is_ and how its API is designed lives in [SPEC.md](../SPEC.md); s
 
 ## Guides
 
-| Guide                                 | Covers                                                                       |
-| ------------------------------------- | ---------------------------------------------------------------------------- |
-| [The circuit store](circuit-store.md) | `createCircuit()`: wires, drivers, buses, and how probes are told of changes |
-| [Publishing to npm](publishing.md)    | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing   |
+| Guide                                                        | Covers                                                                       |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| [The circuit store](circuit-store.md)                        | `createCircuit()`: wires, drivers, buses, and how probes are told of changes |
+| [Triggers, scopes, and wire names](triggers-scopes-names.md) | The parsers behind `trigger="…"`, breakpoint scopes, and path-style names    |
+| [Publishing to npm](publishing.md)                           | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing   |
 
 Add a guide when a system gets big enough to need a walkthrough, and link it from the map below.
 
@@ -21,8 +22,12 @@ g-element/
 │   ├── index.ts              Root entry point: re-exports everything public
 │   └── core/                 The circuit store: plain TypeScript, no React, no DOM
 │       ├── index.ts          The `@styleeyes/g-element/core` entry point
-│       ├── circuit.ts        createCircuit(): wires, drivers, buses, probes
-│       └── circuit.test.ts   Its unit tests
+│       ├── circuit.ts        createCircuit(): wires, drivers, buses, edges, probes
+│       ├── registry.ts       What's connected to each wire
+│       ├── names.ts          resolveWire(): path-style wire names
+│       ├── scope.ts          parseScope(): breakpoint scope → media query
+│       ├── trigger.ts        parseTrigger(): trigger strings → entries
+│       └── *.test.ts         Unit tests, beside the file they test
 ├── dist/                     Build output (git-ignored): .js, .d.ts, and source maps
 ├── docs/                     SPEC.md (the design) and this guide
 ├── .changeset/               Changesets config, plus pending release notes

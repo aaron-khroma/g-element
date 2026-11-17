@@ -1,6 +1,6 @@
 import { createCircuit, type CircuitEnv } from './circuit.js';
 
-const OFF = { powered: false, signal: null, everPowered: false };
+const OFF = { powered: false, signal: null, edge: 'off', everPowered: false };
 
 describe('measuring', () => {
 	it('measures unknown wires as unpowered with no signal', () => {
@@ -24,7 +24,11 @@ describe('latch', () => {
 		const circuit = createCircuit();
 		circuit.setSignal('theme', 'night');
 		circuit.power('theme', true);
-		expect(circuit.measure('theme')).toEqual({ powered: true, signal: 'night', everPowered: true });
+		expect(circuit.measure('theme')).toMatchObject({
+			powered: true,
+			signal: 'night',
+			everPowered: true,
+		});
 	});
 
 	it('toggles between on and off', () => {
@@ -39,7 +43,7 @@ describe('latch', () => {
 		const circuit = createCircuit();
 		circuit.power('gallery', true);
 		circuit.power('gallery', false);
-		expect(circuit.measure('gallery')).toEqual({ ...OFF, everPowered: true });
+		expect(circuit.measure('gallery')).toEqual({ ...OFF, edge: 'falling', everPowered: true });
 	});
 });
 
@@ -237,6 +241,8 @@ describe('delayed release', () => {
 		const env: CircuitEnv = {
 			setTimeout: (callback) => scheduled.push(callback),
 			clearTimeout: () => {},
+			requestFrame: () => undefined,
+			cancelFrame: () => {},
 		};
 		const circuit = createCircuit({}, env);
 		const hover = Symbol('hover');
@@ -429,5 +435,182 @@ describe('buses', () => {
 		const circuit = createCircuit({ buses: { tabs: { wires: ['a', 'b'] } } });
 		expect(() => circuit.install({ buses: { tabs: { wires: ['a', 'b'] } } })).not.toThrow();
 		expect(() => circuit.install({ buses: { tabs: { wires: ['a', 'c'] } } })).toThrow();
+	});
+});
+
+describe('edges', () => {
+	/** Timers from the host; frames run only when the test calls `frame()`. */
+	function framedCircuit(schematic = {}) {
+		const frames = new Map<number, () => void>();
+		let nextFrame = 0;
+		const env: CircuitEnv = {
+			setTimeout: (callback, ms) => setTimeout(callback, ms),
+			clearTimeout: (handle) => clearTimeout(handle as number),
+			requestFrame: (callback) => {
+				frames.set(++nextFrame, callback);
+				return nextFrame;
+			},
+			cancelFrame: (handle) => frames.delete(handle as number),
+		};
+		const frame = () => {
+			const due = [...frames.values()];
+			frames.clear();
+			for (const callback of due) callback();
+		};
+		return { circuit: createCircuit(schematic, env), frame, frames };
+	}
+
+	it('rises when powered, then settles on the next frame when nothing holds it', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		expect(circuit.measure('menu').edge).toBe('rising');
+		frame();
+		expect(circuit.measure('menu').edge).toBe('on');
+	});
+
+	it('falls when powered off, then settles off', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		frame();
+		circuit.power('menu', false);
+		expect(circuit.measure('menu')).toMatchObject({ powered: false, edge: 'falling' });
+		frame();
+		expect(circuit.measure('menu').edge).toBe('off');
+	});
+
+	it('waits for every hold before settling', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		const panel = circuit.holdEdge('menu');
+		const backdrop = circuit.holdEdge('menu');
+		frame();
+		panel();
+		expect(circuit.measure('menu').edge).toBe('rising');
+		backdrop();
+		expect(circuit.measure('menu').edge).toBe('on');
+	});
+
+	it('waits for the frame even when every hold finishes first', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		circuit.holdEdge('menu')();
+		expect(circuit.measure('menu').edge).toBe('rising');
+		frame();
+		expect(circuit.measure('menu').edge).toBe('on');
+	});
+
+	it('counts a hold once, however often it is let go', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		const panel = circuit.holdEdge('menu');
+		const backdrop = circuit.holdEdge('menu');
+		frame();
+		panel();
+		panel();
+		expect(circuit.measure('menu').edge).toBe('rising');
+		backdrop();
+		expect(circuit.measure('menu').edge).toBe('on');
+	});
+
+	it('reverses at once when the power changes mid-edge, ignoring holds on the earlier edge', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		const opening = circuit.holdEdge('menu');
+		circuit.power('menu', false);
+		expect(circuit.measure('menu').edge).toBe('falling');
+		const closing = circuit.holdEdge('menu');
+		frame();
+		opening();
+		expect(circuit.measure('menu').edge).toBe('falling');
+		closing();
+		expect(circuit.measure('menu').edge).toBe('off');
+	});
+
+	it('ignores a hold taken after the edge settled', () => {
+		const { circuit, frame } = framedCircuit();
+		circuit.power('menu', true);
+		frame();
+		const late = circuit.holdEdge('menu');
+		late();
+		expect(circuit.measure('menu').edge).toBe('on');
+		expect(circuit.holdEdge('unknown')).toBeTypeOf('function');
+	});
+
+	it('tells probes when the edge settles', () => {
+		const { circuit, frame } = framedCircuit();
+		const probe = vi.fn();
+		circuit.probe('menu', probe);
+		circuit.power('menu', true);
+		expect(probe).toHaveBeenCalledTimes(1);
+		frame();
+		expect(probe).toHaveBeenCalledTimes(2);
+	});
+
+	it('starts installed wires settled, pullups included', () => {
+		const { circuit, frames } = framedCircuit({
+			wires: { menu: { powered: true } },
+			buses: { nav: { wires: ['program', 'design'], pullup: 'program' } },
+		});
+		expect(circuit.measure('menu').edge).toBe('on');
+		expect(circuit.measure('program').edge).toBe('on');
+		expect(frames.size).toBe(0);
+	});
+
+	it('starts no edge when the power ends an operation where it began', () => {
+		const { circuit, frames } = framedCircuit({
+			buses: { nav: { wires: ['program', 'design'], pullup: 'program' } },
+		});
+		circuit.power('program', false);
+		expect(circuit.measure('program').edge).toBe('on');
+		expect(frames.size).toBe(0);
+	});
+
+	it('stops waiting on a wire once it is uninstalled', () => {
+		const { circuit, frames } = framedCircuit();
+		const uninstall = circuit.install({ wires: { menu: {} } });
+		circuit.power('menu', true);
+		expect(frames.size).toBe(1);
+		uninstall();
+		expect(frames.size).toBe(0);
+	});
+});
+
+describe('default environment', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		vi.useRealTimers();
+	});
+
+	it('uses the host’s animation frames when it has them', () => {
+		const frames: (() => void)[] = [];
+		vi.stubGlobal('requestAnimationFrame', (callback: () => void) => frames.push(callback));
+		vi.stubGlobal('cancelAnimationFrame', vi.fn());
+		const circuit = createCircuit();
+		circuit.power('menu', true);
+		expect(frames).toHaveLength(1);
+		frames[0]?.();
+		expect(circuit.measure('menu').edge).toBe('on');
+	});
+
+	it('cancels the waiting frame when the edge reverses', () => {
+		const cancel = vi.fn();
+		vi.stubGlobal('requestAnimationFrame', () => 7);
+		vi.stubGlobal('cancelAnimationFrame', cancel);
+		const circuit = createCircuit();
+		circuit.power('menu', true);
+		circuit.power('menu', false);
+		expect(cancel).toHaveBeenCalledWith(7);
+	});
+
+	it('falls back to a frame-length timer where there are no animation frames', () => {
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		vi.stubGlobal('requestAnimationFrame', undefined);
+		vi.stubGlobal('cancelAnimationFrame', undefined);
+		const circuit = createCircuit();
+		circuit.power('menu', true);
+		vi.advanceTimersByTime(15);
+		expect(circuit.measure('menu').edge).toBe('rising');
+		vi.advanceTimersByTime(1);
+		expect(circuit.measure('menu').edge).toBe('on');
 	});
 });

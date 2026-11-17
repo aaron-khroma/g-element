@@ -8,15 +8,17 @@ This guide walks through it from the outside in.
 
 The code is named after the circuit it models. Most of these names come straight from digital electronics, where a wire with several drivers, a pullup, and a shared bus are everyday ideas.
 
-| Term            | In the code                                      | Meaning                                                                                     |
-| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| **Measurement** | `measure(wire)` → `Measurement`                  | A wire's current power, signal, and `everPowered`, as one frozen object                     |
-| **Latch**       | `power`, `toggle`, `setSignal`                   | A switch that stays where you put it                                                        |
-| **Driver**      | `drive`, `release`                               | A momentary hand holding a wire on (a hover, a focus), identified by a `symbol`             |
-| **Trip**        | `trip(wire)`, `power(wire, false)`               | Like a breaker: clears the latch and cuts every driver until it's released and driven again |
-| **Bus**         | `buses` in a schematic                           | Wires where only one conducts at a time; a **pullup** member powers on when all are off     |
-| **Schematic**   | `install(schematic)`, `createCircuit(schematic)` | Starting states and buses, installed into the circuit                                       |
-| **Probe**       | `probe(wire, fn)`, `probeAll(fn)`                | A function that runs when a wire changes. Returns a function that detaches it               |
+| Term            | In the code                                      | Meaning                                                                                         |
+| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **Measurement** | `measure(wire)` → `Measurement`                  | A wire's current power, signal, and `everPowered`, as one frozen object                         |
+| **Latch**       | `power`, `toggle`, `setSignal`                   | A switch that stays where you put it                                                            |
+| **Driver**      | `drive`, `release`                               | A momentary hand holding a wire on (a hover, a focus), identified by a `symbol`                 |
+| **Trip**        | `trip(wire)`, `power(wire, false)`               | Like a breaker: clears the latch and cuts every driver until it's released and driven again     |
+| **Bus**         | `buses` in a schematic                           | Wires where only one conducts at a time; a **pullup** member powers on when all are off         |
+| **Schematic**   | `install(schematic)`, `createCircuit(schematic)` | Starting states and buses, installed into the circuit                                           |
+| **Probe**       | `probe(wire, fn)`, `probeAll(fn)`                | A function that runs when a wire changes. Returns a function that detaches it                   |
+| **Edge**        | `measure(wire).edge`, `holdEdge(wire)`           | Where a wire is in its transition: `rising` or `falling`, then settled `on` or `off`            |
+| **Connection**  | `connect(wire, …)`, `connections(wire)`          | A part, input, or load registered on a wire, for the overlay and for inputs to find their loads |
 
 ## Using it
 
@@ -47,6 +49,7 @@ interface Wire {
 	latchedSignal: Signal;
 	readonly drivers: Map<symbol, Driver>; // in assertion order, so the last is the newest
 	reading: Measurement;
+	edge: Edge; // and generation, holds, frame: see Edges below
 }
 ```
 
@@ -55,6 +58,7 @@ interface Wire {
 ```
 powered = latch OR (any driver that is engaged and not cut)
 signal  = the newest such driver's signal, else the latched signal
+edge    = the wire's current edge (see Edges)
 ```
 
 So **a wire can be on while its latch is off.** A hovered menu has `latch: false` and one driver. Code that asks "is this wire on?" uses `measure(name).powered`, never `latch`.
@@ -205,9 +209,54 @@ Docs: [try…finally](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Re
 
 `install(schematic)` is how `<GCircuit>` and `<GScope>` add wires and buses, and it returns an **uninstall** function. Installs are reference-counted. The first install of a wire applies its starting state, later ones only count, and the last uninstall forgets the wire, clearing its pending timers. Counting makes installing twice harmless, which matters because React's StrictMode mounts effects twice in development, and `GScope` will install during render as well as in an effect. A new bus calls `pullUp` once, which is how a pullup starts on.
 
-## Timers: `env`
+## Edges: `rising`, `falling`, and holds
 
-`createCircuit(schematic, env)` takes the timers it uses. It defaults to the host's `setTimeout`/`clearTimeout` through `globalThis`, so `core/` never names `window`. Tests pass a fake clock ([Vitest fake timers](https://vitest.dev/guide/mocking/timers)) or their own `env`.
+A panel that fades out must stay visible until the fade finishes, even though its wire is already off. So a measurement carries an `edge` beside `powered`:
+
+```
+off ──power on──▶ rising ──settles──▶ on ──power off──▶ falling ──settles──▶ off
+```
+
+`powered` changes at once, and `edge` says whether anything is still animating. CSS can then keep a closing element shown during `falling` (`hidden g-on:block g-falling:block`).
+
+**Who decides when an edge settles?** The loads that animate. A load reads its own transition time when the edge starts, calls `const done = circuit.holdEdge(wire)`, and calls `done()` when its transition ends. The edge settles when **both** of these are true:
+
+1. **One frame has passed** since it began. Loads take their holds while React commits, which is before the next frame, so a wire with no animated loads still gives them a chance. Then it settles on that frame.
+2. **Every hold is let go.**
+
+Each `Wire` keeps four fields for this:
+
+| Field        | Meaning                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `edge`       | The current phase, copied into the measurement by `resolve`                                  |
+| `generation` | Counts edges, so a `done()` or frame from an earlier edge can tell it's stale and do nothing |
+| `holds`      | Holds on the current edge not yet let go                                                     |
+| `frame`      | The pending frame callback, until it runs                                                    |
+
+`beginEdge` starts an edge: it bumps `generation`, clears `holds`, cancels the old frame, sets `rising` or `falling`, and asks `env.requestFrame` for a new frame. `settle(name, generation)` runs after the frame and after each `done()`. It changes the edge to `on` or `off` (through `update`, so probes hear about it) only when the generation still matches, the frame has run, and no holds remain.
+
+**Reversal.** If the power changes mid-edge, a new edge begins at once, in the other direction. CSS transitions reverse from wherever they are, so nothing waits for the first edge. Holds from the earlier edge belong to an older generation, so their `done()` calls are ignored.
+
+**When edges begin.** `propagate` begins them, once per operation, by comparing each wire's power with its baseline. So power that flips and flips back within one operation, like a pullup tripped and re-latched, starts no edge at all. While a schematic is installing, edges settle immediately instead: a menu that starts open is `on` in the prerendered HTML, not `rising`.
+
+| Test                                                           | Rule                             |
+| -------------------------------------------------------------- | -------------------------------- |
+| rises when powered, then settles on the next frame…            | no holds: settle on the frame    |
+| waits for every hold before settling                           | holds are counted                |
+| waits for the frame even when every hold finishes first        | both conditions                  |
+| reverses at once when the power changes mid-edge…              | generations make old holds stale |
+| starts no edge when the power ends an operation where it began | edges are judged per operation   |
+| starts installed wires settled, pullups included               | starting states don't animate    |
+
+## Connections: the registry
+
+[`registry.ts`](../../src/core/registry.ts) records what is connected to each wire: parts, inputs, and loads, each with a `label` and, in the browser, its element. Every circuit includes one, so `circuit.connect(wire, connection)` returns a function that disconnects it, and `circuit.connections(wire)` lists them.
+
+It's kept apart from wire probes on purpose. Components connect when they mount, and if that counted as a wire change, every reader of the wire would re-render on every mount. Instead, `probeConnections` tells the overlay when the wiring changes. `connections` returns the same frozen array until that wire's connections change, so it's safe to use as a React snapshot too.
+
+## Timers and frames: `env`
+
+`createCircuit(schematic, env)` takes the timers and frames it uses. It defaults to the host's `setTimeout`/`clearTimeout` and `requestAnimationFrame`/`cancelAnimationFrame` through `globalThis`, falling back to a 16 ms timer where there are no frames (Node, prerendering), so `core/` never names `window`. Tests pass a fake clock ([Vitest fake timers](https://vitest.dev/guide/mocking/timers)) or their own `env`. The edge tests use an `env` whose frames run only when the test says so.
 
 ## How React will use it
 
@@ -228,4 +277,4 @@ Docs: [useSyncExternalStore](https://react.dev/reference/react/useSyncExternalSt
 
 ## The tests
 
-[`circuit.test.ts`](../../src/core/circuit.test.ts) states each rule in plain words, grouped as measuring, latch, drivers, sustain-only drivers, trip, delayed release, notifications, schematics, and buses. Delayed releases run on Vitest's fake timers (`vi.useFakeTimers()`, `vi.advanceTimersByTime(ms)`), so they're instant and exact. When you add a behavior, add the test that states it first.
+[`circuit.test.ts`](../../src/core/circuit.test.ts) states each rule in plain words, grouped as measuring, latch, drivers, sustain-only drivers, trip, delayed release, notifications, schematics, buses, and edges. The registry has its own `registry.test.ts`. Delayed releases run on Vitest's fake timers (`vi.useFakeTimers()`, `vi.advanceTimersByTime(ms)`), so they're instant and exact. When you add a behavior, add the test that states it first.
