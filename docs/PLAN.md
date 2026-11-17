@@ -57,7 +57,7 @@ interface Measurement {
 4. **Sustain-only drivers** (`GHold`) count only if the wire was already on when they asserted. A hold can keep a wire on, but never turn it on. That's QElement's `sustain` contract.
 5. **Trip** (P2). `trip(wire)`, or `power(wire, false)`, clears the latch and marks every active driver `cut`, like a breaker. A cut driver stops counting until it's released and asserted again.
 6. **Buses.** When any member's power rises, every other member is tripped. Deciding this is bus _arbitration_. When the last member's power falls and the bus has a `pullup`, the pullup's latch is set. At creation, the pullup starts on unless another member is declared `powered`. Two members declared `powered` is a dev error.
-7. **Edges.** A power change sets `rising` or `falling` and starts a new edge _generation_. Participants (loads with transitions) call `const done = circuit.holdEdge(wire)` during commit. The edge settles to `on`/`off` when every hold of the current generation is done. Core waits one frame before settling an edge with no holds, so loads get a chance to register. A reversal starts a new generation, and stale `done` calls are ignored.
+7. **Edges.** A power change sets `rising` or `falling` and starts a new edge _generation_. Participants (loads with transitions) call `const done = circuit.holdEdge(wire)` during commit. The edge settles to `on`/`off` when every hold of the current generation is done. Core waits one frame before settling an edge with no holds, so loads get a chance to register. A reversal starts a new generation, and stale `done` calls are ignored. An edge is judged once per operation, so power that flips and flips back (a pullup re-latching) starts none, and wires powered by a schematic as it installs start settled, so starting states never animate.
 
 `data-g-power` follows power **immediately**, and `data-g-edge` follows the phase. So `g-on:` matches during `rising` and `on`, and `g-falling:` is what keeps a closing element visible while it animates out (`hidden g-on:block g-falling:block`), as `power-down` did.
 
@@ -65,8 +65,7 @@ interface Measurement {
 
 ```
 src/core/
-├── circuit.ts       createCircuit(): latch, drivers, signal, buses, subscriptions
-├── edge.ts          edge generations and holds
+├── circuit.ts       createCircuit(): latch, drivers, signal, buses, edges (generations and holds), probes
 ├── names.ts         resolveWire(name, scopePath): '/theme' → 'theme', 'gallery' + 'case-study' → 'case-study/gallery'
 ├── trigger.ts       parseTrigger('max-md:click md:mouseleave|mouseenter') → TriggerEntry[]
 ├── scope.ts         parseScope('md:max-lg') → media query '(width >= 48rem) and (width < 64rem)'
@@ -107,9 +106,10 @@ interface Circuit {
 	// Registry
 	connect(wire: string, c: { kind: 'part' | 'input' | 'load'; label: string; element?: unknown }): () => void;
 	connections(wire: string): readonly Connection[];
+	probeConnections(probe: (wire: string) => void): () => void; // overlay redraws
 }
 
-createCircuit(schematic?: Schematic, env?: { setTimeout; clearTimeout; frame }): Circuit;
+createCircuit(schematic?: Schematic, env?: { setTimeout; clearTimeout; requestFrame; cancelFrame }): Circuit;
 ```
 
 `env` makes timers injectable, so core tests run deterministically and core never touches `window`.

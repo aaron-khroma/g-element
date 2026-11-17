@@ -4,13 +4,22 @@
  * The resolution rules are specified in docs/PLAN.md §2.
  */
 
+import { createRegistry, type Registry } from './registry.js';
+
 export type Signal = string | null;
+
+/**
+ * Where a wire is in its transition. A power change starts `rising` or `falling`, which settles
+ * to `on` or `off` once everything animating it has finished.
+ */
+export type Edge = 'off' | 'rising' | 'on' | 'falling';
 
 export interface Measurement {
 	/** The latch is set, or at least one active driver is engaged and isn't cut. */
 	readonly powered: boolean;
 	/** The newest engaged driver's signal, else the latched signal. */
 	readonly signal: Signal;
+	readonly edge: Edge;
 	/** Whether the wire has ever been powered. Content that loads on first use reads this. */
 	readonly everPowered: boolean;
 }
@@ -48,12 +57,16 @@ export interface ReleaseOptions {
 export interface CircuitEnv {
 	setTimeout(callback: () => void, ms: number): unknown;
 	clearTimeout(handle: unknown): void;
+	/** Run once before the next paint (a browser's animation frame). */
+	requestFrame(callback: () => void): unknown;
+	cancelFrame(handle: unknown): void;
 }
 
 export type Probe = () => void;
 export type WireProbe = (wire: string) => void;
 
-export interface Circuit {
+/** The store, plus the registry of what's connected to each wire (see `registry.ts`). */
+export interface Circuit extends Registry {
 	/** Measure a wire. The same object comes back until the wire actually changes. */
 	measure(wire: string): Measurement;
 	/** Attach a probe to one wire. Returns a function that detaches it. */
@@ -76,6 +89,13 @@ export interface Circuit {
 	release(wire: string, driver: symbol, options?: ReleaseOptions): void;
 
 	/**
+	 * Keep the wire's current edge from settling until the returned function is called. Loads
+	 * that animate hold the edge for as long as their transition runs. If the edge has already
+	 * settled, or the power changes again first, the returned function does nothing.
+	 */
+	holdEdge(wire: string): () => void;
+
+	/**
 	 * Install a schematic: wires' starting states and buses. Installs are reference-counted: the
 	 * first applies starting states, and the returned function uninstalls this one (and, with the
 	 * last install, forgets the wire's state).
@@ -96,6 +116,13 @@ interface Wire {
 	/** In assertion order, so the last entry is the newest. */
 	readonly drivers: Map<symbol, Driver>;
 	reading: Measurement;
+	edge: Edge;
+	/** Counts power changes, so holds and frames from an earlier edge can tell they're stale. */
+	generation: number;
+	/** Holds taken on the current edge and not yet let go. */
+	holds: number;
+	/** The pending frame that gives loads a chance to hold the edge, until it runs. */
+	frame: unknown;
 }
 
 interface Bus {
@@ -104,17 +131,41 @@ interface Bus {
 	references: number;
 }
 
-const OFF: Measurement = Object.freeze({ powered: false, signal: null, everPowered: false });
+const OFF: Measurement = Object.freeze({
+	powered: false,
+	signal: null,
+	edge: 'off',
+	everPowered: false,
+});
 
-const host = globalThis as unknown as CircuitEnv;
+interface Host {
+	setTimeout(callback: () => void, ms: number): unknown;
+	clearTimeout(handle: unknown): void;
+	requestAnimationFrame?: (callback: () => void) => unknown;
+	cancelAnimationFrame?: (handle: unknown) => void;
+}
+
+const host = globalThis as unknown as Host;
+const FRAME_MS = 16;
 const defaultEnv: CircuitEnv = {
 	setTimeout: (callback, ms) => host.setTimeout(callback, ms),
 	clearTimeout: (handle) => host.clearTimeout(handle),
+	requestFrame: (callback) => {
+		return host.requestAnimationFrame
+			? host.requestAnimationFrame(callback)
+			: host.setTimeout(callback, FRAME_MS);
+	},
+	cancelFrame: (handle) =>
+		host.cancelAnimationFrame ? host.cancelAnimationFrame(handle) : host.clearTimeout(handle),
 };
 
 function sameReading(a: Measurement, b: Measurement): boolean {
 	return (
-		a === b || (a.powered === b.powered && a.signal === b.signal && a.everPowered === b.everPowered)
+		a === b ||
+		(a.powered === b.powered &&
+			a.signal === b.signal &&
+			a.edge === b.edge &&
+			a.everPowered === b.everPowered)
 	);
 }
 
@@ -129,6 +180,7 @@ function resolve(wire: Wire): Measurement {
 	const next: Measurement = {
 		powered,
 		signal: driven ?? wire.latchedSignal,
+		edge: wire.edge,
 		everPowered: wire.reading.everPowered || powered,
 	};
 	return sameReading(next, wire.reading) ? wire.reading : Object.freeze(next);
@@ -146,13 +198,24 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 	const baselines = new Map<string, Measurement>();
 	let depth = 0;
 	let propagating = false;
+	/** While a schematic installs, power changes settle at once: starting states don't animate. */
+	let installing = false;
 
 	const measure = (name: string): Measurement => wires.get(name)?.reading ?? OFF;
 
 	function ensure(name: string): Wire {
 		let wire = wires.get(name);
 		if (!wire) {
-			wire = { latch: false, latchedSignal: null, drivers: new Map(), reading: OFF };
+			wire = {
+				latch: false,
+				latchedSignal: null,
+				drivers: new Map(),
+				reading: OFF,
+				edge: 'off',
+				generation: 0,
+				holds: 0,
+				frame: undefined,
+			};
 			wires.set(name, wire);
 		}
 		return wire;
@@ -175,15 +238,17 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 				const round = [...baselines];
 				baselines.clear();
 				for (const [name, before] of round) {
+					const wire = wires.get(name);
+					// Judged per operation, so power that flips and flips back starts no edge.
+					if (wire && before.powered !== wire.reading.powered) beginEdge(name, wire);
 					if (sameReading(before, measure(name))) {
 						// Hand back the original object, so identity-based readers see no change.
-						const wire = wires.get(name);
 						if (wire) wire.reading = before;
-						continue;
+					} else {
+						// Copies: probes may attach or detach probes while being notified.
+						for (const probe of [...(probes.get(name) ?? [])]) probe();
+						for (const probe of [...allProbes]) probe(name);
 					}
-					// Copies: probes may attach or detach probes while being notified.
-					for (const probe of [...(probes.get(name) ?? [])]) probe();
-					for (const probe of [...allProbes]) probe(name);
 				}
 			}
 		} finally {
@@ -210,6 +275,38 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 			mutate(wire);
 			wire.reading = resolve(wire);
 			if (wire.reading.powered !== wasPowered) arbitrate(name, wire.reading.powered);
+		});
+	}
+
+	/**
+	 * Start a new edge in the wire's power direction. Loads get one frame to hold it, and it settles
+	 * once the frame has passed and every hold is let go.
+	 */
+	function beginEdge(name: string, wire: Wire): void {
+		const generation = ++wire.generation;
+		wire.holds = 0;
+		env.cancelFrame(wire.frame);
+		wire.frame = undefined;
+		if (installing) {
+			wire.edge = wire.reading.powered ? 'on' : 'off';
+		} else {
+			wire.edge = wire.reading.powered ? 'rising' : 'falling';
+			wire.frame = env.requestFrame(() => {
+				wire.frame = undefined;
+				// This edge's generation, so a frame left over from a reversed edge does nothing.
+				settle(name, generation);
+			});
+		}
+		wire.reading = resolve(wire);
+	}
+
+	function settle(name: string, generation: number): void {
+		const wire = wires.get(name);
+		if (!wire || wire.generation !== generation) return;
+		if (wire.frame !== undefined || wire.holds > 0) return;
+		if (wire.edge !== 'rising' && wire.edge !== 'falling') return;
+		update(name, (wire) => {
+			wire.edge = wire.reading.powered ? 'on' : 'off';
 		});
 	}
 
@@ -275,28 +372,33 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 		const wireEntries = Object.entries(schematic.wires ?? {});
 		const busEntries = Object.entries(schematic.buses ?? {});
 
-		transact(() => {
-			for (const [name, spec] of wireEntries) {
-				const references = installs.get(name) ?? 0;
-				installs.set(name, references + 1);
-				if (references > 0 || wires.has(name)) continue;
-				update(name, (wire) => {
-					wire.latch = spec.powered ?? false;
-					wire.latchedSignal = spec.signal ?? null;
-				});
-			}
-			for (const [busName, spec] of busEntries) {
-				const existing = buses.get(busName);
-				if (existing) {
-					existing.references++;
-					continue;
+		installing = true;
+		try {
+			transact(() => {
+				for (const [name, spec] of wireEntries) {
+					const references = installs.get(name) ?? 0;
+					installs.set(name, references + 1);
+					if (references > 0 || wires.has(name)) continue;
+					update(name, (wire) => {
+						wire.latch = spec.powered ?? false;
+						wire.latchedSignal = spec.signal ?? null;
+					});
 				}
-				const bus: Bus = { wires: [...spec.wires], pullup: spec.pullup, references: 1 };
-				buses.set(busName, bus);
-				for (const member of bus.wires) busOf.set(member, bus);
-				pullUp(bus);
-			}
-		});
+				for (const [busName, spec] of busEntries) {
+					const existing = buses.get(busName);
+					if (existing) {
+						existing.references++;
+						continue;
+					}
+					const bus: Bus = { wires: [...spec.wires], pullup: spec.pullup, references: 1 };
+					buses.set(busName, bus);
+					for (const member of bus.wires) busOf.set(member, bus);
+					pullUp(bus);
+				}
+			});
+		} finally {
+			installing = false;
+		}
 
 		let removed = false;
 		return () => {
@@ -319,6 +421,7 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 					const wire = wires.get(name);
 					if (!wire) continue;
 					touch(name);
+					env.cancelFrame(wire.frame);
 					for (const driver of wire.drivers.values()) env.clearTimeout(driver.releaseTimer);
 					wires.delete(name);
 				}
@@ -327,6 +430,7 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 	}
 
 	const circuit: Circuit = {
+		...createRegistry(),
 		measure,
 
 		probe(name, probe) {
@@ -395,6 +499,21 @@ export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defau
 				if (wires.get(name)?.drivers.get(id) === driver) remove();
 			}, options.delay);
 		},
+		holdEdge(name) {
+			const wire = wires.get(name);
+			if (!wire || (wire.edge !== 'rising' && wire.edge !== 'falling')) return () => {};
+			const generation = wire.generation;
+			wire.holds++;
+			let held = true;
+			return () => {
+				if (!held) return;
+				held = false;
+				if (wires.get(name) !== wire || wire.generation !== generation) return;
+				wire.holds--;
+				settle(name, generation);
+			};
+		},
+
 		install,
 	};
 
