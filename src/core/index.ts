@@ -1,14 +1,14 @@
 export { createCircuit } from './circuit.js';
 export type {
-	BusDeclaration,
+	BusSpec,
 	Circuit,
-	CircuitDeclarations,
+	Schematic,
 	CircuitEnv,
 	DriveOptions,
-	Listener,
+	Probe,
 	ReleaseOptions,
 	Signal,
-	WireDeclaration,
-	WireListener,
-	WireState,
+	WireSpec,
+	WireProbe,
+	Measurement,
 } from './circuit.js';

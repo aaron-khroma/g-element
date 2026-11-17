@@ -6,30 +6,30 @@
 
 export type Signal = string | null;
 
-export interface WireState {
-	/** The latch is set, or at least one active driver counts and isn't cut. */
+export interface Measurement {
+	/** The latch is set, or at least one active driver is engaged and isn't cut. */
 	readonly powered: boolean;
-	/** The newest counting driver's signal, else the latched signal. */
+	/** The newest engaged driver's signal, else the latched signal. */
 	readonly signal: Signal;
 	/** Whether the wire has ever been powered. Content that loads on first use reads this. */
 	readonly everPowered: boolean;
 }
 
-export interface WireDeclaration {
+export interface WireSpec {
 	readonly powered?: boolean;
 	readonly signal?: string;
 }
 
-export interface BusDeclaration {
+export interface BusSpec {
 	/** Member wires. Only one of them conducts at a time. */
 	readonly wires: readonly string[];
 	/** The member that powers on whenever every member is off. */
 	readonly pullup?: string;
 }
 
-export interface CircuitDeclarations {
-	readonly wires?: Readonly<Record<string, WireDeclaration>>;
-	readonly buses?: Readonly<Record<string, BusDeclaration>>;
+export interface Schematic {
+	readonly wires?: Readonly<Record<string, WireSpec>>;
+	readonly buses?: Readonly<Record<string, BusSpec>>;
 }
 
 export interface DriveOptions {
@@ -50,20 +50,22 @@ export interface CircuitEnv {
 	clearTimeout(handle: unknown): void;
 }
 
-export type Listener = () => void;
-export type WireListener = (wire: string) => void;
+export type Probe = () => void;
+export type WireProbe = (wire: string) => void;
 
 export interface Circuit {
-	/** Current state of a wire. Identity-stable until the wire actually changes. */
-	read(wire: string): WireState;
-	/** Subscribe to one wire's changes. Returns an unsubscribe function. */
-	subscribe(wire: string, listener: Listener): () => void;
-	/** Subscribe to every wire's changes. Returns an unsubscribe function. */
-	subscribeAll(listener: WireListener): () => void;
+	/** Measure a wire. The same object comes back until the wire actually changes. */
+	measure(wire: string): Measurement;
+	/** Attach a probe to one wire. Returns a function that detaches it. */
+	probe(wire: string, probe: Probe): () => void;
+	/** Attach a probe to every wire. It receives the name of the wire that changed. */
+	probeAll(probe: WireProbe): () => void;
 
-	/** Set the latch, or (with `false`) hard-off the wire: clear the latch and cut every driver. */
+	/** Set the latch, or (with `false`) trip the wire: clear the latch and cut every driver. */
 	power(wire: string, on: boolean): void;
-	/** Hard-off a powered wire, or latch an unpowered one. */
+	/** Clear the latch and cut every driver, like a breaker. A cut driver stays off until it is released and driven again. */
+	trip(wire: string): void;
+	/** Trip a powered wire, or latch an unpowered one. */
 	toggle(wire: string): void;
 	/** Set the latched signal. */
 	setSignal(wire: string, signal: Signal): void;
@@ -74,26 +76,26 @@ export interface Circuit {
 	release(wire: string, driver: symbol, options?: ReleaseOptions): void;
 
 	/**
-	 * Declare wires' starting states and buses. Declarations are reference-counted: the first one
-	 * applies starting states, and the returned function removes this one (and, with the last
-	 * reference, the wire's state).
+	 * Install a schematic: wires' starting states and buses. Installs are reference-counted: the
+	 * first applies starting states, and the returned function uninstalls this one (and, with the
+	 * last install, forgets the wire's state).
 	 */
-	declare(declarations: CircuitDeclarations): () => void;
+	install(schematic: Schematic): () => void;
 }
 
 interface Driver {
 	readonly signal: string | undefined;
-	readonly counts: boolean;
+	readonly engaged: boolean;
 	cut: boolean;
 	releaseTimer: unknown;
 }
 
-interface WireRecord {
+interface Wire {
 	latch: boolean;
 	latchedSignal: Signal;
 	/** In assertion order, so the last entry is the newest. */
 	readonly drivers: Map<symbol, Driver>;
-	snapshot: WireState;
+	reading: Measurement;
 }
 
 interface Bus {
@@ -102,7 +104,7 @@ interface Bus {
 	references: number;
 }
 
-const OFF: WireState = Object.freeze({ powered: false, signal: null, everPowered: false });
+const OFF: Measurement = Object.freeze({ powered: false, signal: null, everPowered: false });
 
 const host = globalThis as unknown as CircuitEnv;
 const defaultEnv: CircuitEnv = {
@@ -110,143 +112,141 @@ const defaultEnv: CircuitEnv = {
 	clearTimeout: (handle) => host.clearTimeout(handle),
 };
 
-function sameState(a: WireState, b: WireState): boolean {
+function sameReading(a: Measurement, b: Measurement): boolean {
 	return (
 		a === b || (a.powered === b.powered && a.signal === b.signal && a.everPowered === b.everPowered)
 	);
 }
 
-function resolve(record: WireRecord): WireState {
-	let powered = record.latch;
+function resolve(wire: Wire): Measurement {
+	let powered = wire.latch;
 	let driven: string | undefined;
-	for (const driver of record.drivers.values()) {
-		if (!driver.counts || driver.cut) continue;
+	for (const driver of wire.drivers.values()) {
+		if (!driver.engaged || driver.cut) continue;
 		powered = true;
 		if (driver.signal !== undefined) driven = driver.signal;
 	}
-	const next: WireState = {
+	const next: Measurement = {
 		powered,
-		signal: driven ?? record.latchedSignal,
-		everPowered: record.snapshot.everPowered || powered,
+		signal: driven ?? wire.latchedSignal,
+		everPowered: wire.reading.everPowered || powered,
 	};
-	return sameState(next, record.snapshot) ? record.snapshot : Object.freeze(next);
+	return sameReading(next, wire.reading) ? wire.reading : Object.freeze(next);
 }
 
-export function createCircuit(
-	declarations: CircuitDeclarations = {},
-	env: CircuitEnv = defaultEnv,
-): Circuit {
-	const wires = new Map<string, WireRecord>();
-	const listeners = new Map<string, Set<Listener>>();
-	const allListeners = new Set<WireListener>();
-	const declared = new Map<string, number>();
+export function createCircuit(schematic: Schematic = {}, env: CircuitEnv = defaultEnv): Circuit {
+	const wires = new Map<string, Wire>();
+	const probes = new Map<string, Set<Probe>>();
+	const allProbes = new Set<WireProbe>();
+	const installs = new Map<string, number>();
 	const buses = new Map<string, Bus>();
 	const busOf = new Map<string, Bus>();
 
-	/** Wires changed in the current operation, with their state before it began. */
-	const pending = new Map<string, WireState>();
+	/** Wires changed in the current operation, with their measurement from before it began. */
+	const baselines = new Map<string, Measurement>();
 	let depth = 0;
-	let flushing = false;
+	let propagating = false;
 
-	const read = (name: string): WireState => wires.get(name)?.snapshot ?? OFF;
+	const measure = (name: string): Measurement => wires.get(name)?.reading ?? OFF;
 
-	function ensure(name: string): WireRecord {
-		let record = wires.get(name);
-		if (!record) {
-			record = { latch: false, latchedSignal: null, drivers: new Map(), snapshot: OFF };
-			wires.set(name, record);
+	function ensure(name: string): Wire {
+		let wire = wires.get(name);
+		if (!wire) {
+			wire = { latch: false, latchedSignal: null, drivers: new Map(), reading: OFF };
+			wires.set(name, wire);
 		}
-		return record;
+		return wire;
 	}
 
 	function touch(name: string): void {
-		if (!pending.has(name)) pending.set(name, read(name));
+		if (!baselines.has(name)) baselines.set(name, measure(name));
 	}
 
 	/**
-	 * Notify listeners of every wire that ended an operation in a different state. Changes made by
-	 * listeners land in `pending` (`transact` won't flush while this runs) and go out in later rounds.
+	 * Notify probes of every wire that ended an operation in a different state. Changes made by
+	 * probes land in `baselines` (`transact` won't propagate while this runs) and go out in later
+	 * rounds.
 	 */
-	function flush(): void {
-		flushing = true;
+	function propagate(): void {
+		propagating = true;
 		try {
-			while (pending.size > 0) {
-				// Empty the queue first, so a listener's change gets a fresh entry for the next round.
-				const round = [...pending];
-				pending.clear();
+			while (baselines.size > 0) {
+				// Empty the queue first, so a probe's change gets a fresh entry for the next round.
+				const round = [...baselines];
+				baselines.clear();
 				for (const [name, before] of round) {
-					if (sameState(before, read(name))) {
+					if (sameReading(before, measure(name))) {
 						// Hand back the original object, so identity-based readers see no change.
-						const record = wires.get(name);
-						if (record) record.snapshot = before;
+						const wire = wires.get(name);
+						if (wire) wire.reading = before;
 						continue;
 					}
-					// Copies: listeners may subscribe or unsubscribe while being notified.
-					for (const listener of [...(listeners.get(name) ?? [])]) listener();
-					for (const listener of [...allListeners]) listener(name);
+					// Copies: probes may attach or detach probes while being notified.
+					for (const probe of [...(probes.get(name) ?? [])]) probe();
+					for (const probe of [...allProbes]) probe(name);
 				}
 			}
 		} finally {
-			flushing = false;
+			propagating = false;
 		}
 	}
 
-	/** Run one operation. Listeners hear about it once, after every wire it touches has settled. */
+	/** Run one operation. Probes hear about it once, after every wire it touches has settled. */
 	function transact(operation: () => void): void {
 		depth++;
 		try {
 			operation();
 		} finally {
 			depth--;
-			if (depth === 0 && !flushing) flush();
+			if (depth === 0 && !propagating) propagate();
 		}
 	}
 
-	function update(name: string, mutate: (record: WireRecord) => void): void {
+	function update(name: string, mutate: (wire: Wire) => void): void {
 		transact(() => {
-			const record = ensure(name);
+			const wire = ensure(name);
 			touch(name);
-			const wasPowered = record.snapshot.powered;
-			mutate(record);
-			record.snapshot = resolve(record);
-			if (record.snapshot.powered !== wasPowered) onPowerChange(name, record.snapshot.powered);
+			const wasPowered = wire.reading.powered;
+			mutate(wire);
+			wire.reading = resolve(wire);
+			if (wire.reading.powered !== wasPowered) arbitrate(name, wire.reading.powered);
 		});
 	}
 
-	function hardOff(name: string): void {
-		update(name, (record) => {
-			record.latch = false;
-			for (const driver of record.drivers.values()) driver.cut = true;
+	function trip(name: string): void {
+		update(name, (wire) => {
+			wire.latch = false;
+			for (const driver of wire.drivers.values()) driver.cut = true;
 		});
 	}
 
 	/** Keep a bus valid after one of its members changed power: one member on, or the pullup. */
-	function onPowerChange(name: string, powered: boolean): void {
+	function arbitrate(name: string, powered: boolean): void {
 		const bus = busOf.get(name);
 		if (!bus) return;
 		if (!powered) return pullUp(bus);
 		for (const member of bus.wires) {
-			if (member !== name && read(member).powered) hardOff(member);
+			if (member !== name && measure(member).powered) trip(member);
 		}
 	}
 
 	function pullUp(bus: Bus): void {
-		if (bus.pullup === undefined || bus.wires.some((member) => read(member).powered)) return;
-		update(bus.pullup, (record) => {
-			record.latch = true;
+		if (bus.pullup === undefined || bus.wires.some((member) => measure(member).powered)) return;
+		update(bus.pullup, (wire) => {
+			wire.latch = true;
 		});
 	}
 
-	function validate({ wires: wireDecls = {}, buses: busDecls = {} }: CircuitDeclarations): void {
+	function validate({ wires: wireSpecs = {}, buses: busSpecs = {} }: Schematic): void {
 		const claimed = new Map<string, string>();
-		for (const [busName, bus] of Object.entries(busDecls)) {
+		for (const [busName, bus] of Object.entries(busSpecs)) {
 			const existing = buses.get(busName);
 			if (existing) {
 				const same =
 					existing.pullup === bus.pullup &&
 					existing.wires.length === bus.wires.length &&
 					existing.wires.every((member, i) => member === bus.wires[i]);
-				if (!same) throw new Error(`Bus "${busName}" is already declared with different wires.`);
+				if (!same) throw new Error(`Bus "${busName}" is already installed with different wires.`);
 				continue;
 			}
 			if (bus.pullup !== undefined && !bus.wires.includes(bus.pullup)) {
@@ -261,7 +261,7 @@ export function createCircuit(
 				}
 				claimed.set(member, `bus "${busName}"`);
 			}
-			const powered = bus.wires.filter((member) => wireDecls[member]?.powered);
+			const powered = bus.wires.filter((member) => wireSpecs[member]?.powered);
 			if (powered.length > 1) {
 				throw new Error(
 					`Bus "${busName}": only one wire may start powered (${powered.join(', ')}).`,
@@ -270,28 +270,28 @@ export function createCircuit(
 		}
 	}
 
-	function declare(decls: CircuitDeclarations): () => void {
-		validate(decls);
-		const wireEntries = Object.entries(decls.wires ?? {});
-		const busEntries = Object.entries(decls.buses ?? {});
+	function install(schematic: Schematic): () => void {
+		validate(schematic);
+		const wireEntries = Object.entries(schematic.wires ?? {});
+		const busEntries = Object.entries(schematic.buses ?? {});
 
 		transact(() => {
-			for (const [name, decl] of wireEntries) {
-				const references = declared.get(name) ?? 0;
-				declared.set(name, references + 1);
+			for (const [name, spec] of wireEntries) {
+				const references = installs.get(name) ?? 0;
+				installs.set(name, references + 1);
 				if (references > 0 || wires.has(name)) continue;
-				update(name, (record) => {
-					record.latch = decl.powered ?? false;
-					record.latchedSignal = decl.signal ?? null;
+				update(name, (wire) => {
+					wire.latch = spec.powered ?? false;
+					wire.latchedSignal = spec.signal ?? null;
 				});
 			}
-			for (const [busName, decl] of busEntries) {
+			for (const [busName, spec] of busEntries) {
 				const existing = buses.get(busName);
 				if (existing) {
 					existing.references++;
 					continue;
 				}
-				const bus: Bus = { wires: [...decl.wires], pullup: decl.pullup, references: 1 };
+				const bus: Bus = { wires: [...spec.wires], pullup: spec.pullup, references: 1 };
 				buses.set(busName, bus);
 				for (const member of bus.wires) busOf.set(member, bus);
 				pullUp(bus);
@@ -310,16 +310,16 @@ export function createCircuit(
 					for (const member of bus.wires) busOf.delete(member);
 				}
 				for (const [name] of wireEntries) {
-					const references = (declared.get(name) ?? 1) - 1;
+					const references = (installs.get(name) ?? 1) - 1;
 					if (references > 0) {
-						declared.set(name, references);
+						installs.set(name, references);
 						continue;
 					}
-					declared.delete(name);
-					const record = wires.get(name);
-					if (!record) continue;
+					installs.delete(name);
+					const wire = wires.get(name);
+					if (!wire) continue;
 					touch(name);
-					for (const driver of record.drivers.values()) env.clearTimeout(driver.releaseTimer);
+					for (const driver of wire.drivers.values()) env.clearTimeout(driver.releaseTimer);
 					wires.delete(name);
 				}
 			});
@@ -327,48 +327,50 @@ export function createCircuit(
 	}
 
 	const circuit: Circuit = {
-		read,
+		measure,
 
-		subscribe(name, listener) {
-			let set = listeners.get(name);
-			if (!set) listeners.set(name, (set = new Set()));
-			set.add(listener);
+		probe(name, probe) {
+			let set = probes.get(name);
+			if (!set) probes.set(name, (set = new Set()));
+			set.add(probe);
 			return () => {
-				set.delete(listener);
-				if (set.size === 0 && listeners.get(name) === set) listeners.delete(name);
+				set.delete(probe);
+				if (set.size === 0 && probes.get(name) === set) probes.delete(name);
 			};
 		},
 
-		subscribeAll(listener) {
-			allListeners.add(listener);
-			return () => allListeners.delete(listener);
+		probeAll(probe) {
+			allProbes.add(probe);
+			return () => allProbes.delete(probe);
 		},
 
+		trip,
+
 		power(name, on) {
-			if (!on) return hardOff(name);
-			update(name, (record) => {
-				record.latch = true;
+			if (!on) return trip(name);
+			update(name, (wire) => {
+				wire.latch = true;
 			});
 		},
 
 		toggle(name) {
-			circuit.power(name, !read(name).powered);
+			circuit.power(name, !measure(name).powered);
 		},
 
 		setSignal(name, signal) {
-			update(name, (record) => {
-				record.latchedSignal = signal;
+			update(name, (wire) => {
+				wire.latchedSignal = signal;
 			});
 		},
 
 		drive(name, id, options = {}) {
-			update(name, (record) => {
-				const existing = record.drivers.get(id);
+			update(name, (wire) => {
+				const existing = wire.drivers.get(id);
 				if (existing) env.clearTimeout(existing.releaseTimer);
-				record.drivers.delete(id);
-				record.drivers.set(id, {
+				wire.drivers.delete(id);
+				wire.drivers.set(id, {
 					signal: options.signal,
-					counts: existing?.counts || !options.sustainOnly || record.snapshot.powered,
+					engaged: existing?.engaged || !options.sustainOnly || wire.reading.powered,
 					cut: existing?.cut ?? false,
 					releaseTimer: undefined,
 				});
@@ -383,19 +385,19 @@ export function createCircuit(
 			driver.releaseTimer = undefined;
 			// Removes this driver only: the same symbol may have been driven again since.
 			const remove = () =>
-				update(name, (record) => {
-					if (record.drivers.get(id) === driver) record.drivers.delete(id);
+				update(name, (wire) => {
+					if (wire.drivers.get(id) === driver) wire.drivers.delete(id);
 				});
-			// A driver that doesn't count is holding nothing, so there's nothing to delay.
-			if (!options.delay || driver.cut || !driver.counts) return remove();
+			// A driver that isn't engaged is holding nothing, so there's nothing to delay.
+			if (!options.delay || driver.cut || !driver.engaged) return remove();
 			driver.releaseTimer = env.setTimeout(() => {
 				driver.releaseTimer = undefined;
 				if (wires.get(name)?.drivers.get(id) === driver) remove();
 			}, options.delay);
 		},
-		declare,
+		install,
 	};
 
-	declare(declarations);
+	install(schematic);
 	return circuit;
 }
