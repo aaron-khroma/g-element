@@ -8,17 +8,17 @@ This guide walks through it from the outside in.
 
 The code is named after the circuit it models. Most of these names come straight from digital electronics, where a wire with several drivers, a pullup, and a shared bus are everyday ideas.
 
-| Term            | In the code                                      | Meaning                                                                                         |
-| --------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| **Measurement** | `measure(wire)` → `Measurement`                  | A wire's current power, signal, and `everPowered`, as one frozen object                         |
-| **Latch**       | `power`, `toggle`, `setSignal`                   | A switch that stays where you put it                                                            |
-| **Driver**      | `drive`, `release`                               | A momentary hand holding a wire on (a hover, a focus), identified by a `symbol`                 |
-| **Trip**        | `trip(wire)`, `power(wire, false)`               | Like a breaker: clears the latch and cuts every driver until it's released and driven again     |
-| **Bus**         | `buses` in a schematic                           | Wires where only one conducts at a time; a **pullup** member powers on when all are off         |
-| **Schematic**   | `install(schematic)`, `createCircuit(schematic)` | Starting states and buses, installed into the circuit                                           |
-| **Probe**       | `probe(wire, fn)`, `probeAll(fn)`                | A function that runs when a wire changes. Returns a function that detaches it                   |
-| **Edge**        | `measure(wire).edge`, `holdEdge(wire)`           | Where a wire is in its transition: `rising` or `falling`, then settled `on` or `off`            |
-| **Connection**  | `connect(wire, …)`, `connections(wire)`          | A part, input, or load registered on a wire, for the overlay and for inputs to find their loads |
+| Term            | In the code                                      | Meaning                                                                                                 |
+| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| **Measurement** | `measure(wire)` → `Measurement`                  | A wire's current power, signal, and `everPowered`, as one frozen object                                 |
+| **Latch**       | `power`, `toggle`, `setSignal`                   | A switch that stays where you put it                                                                    |
+| **Driver**      | `drive`, `release`                               | A momentary hand holding a wire on (a hover, a focus), identified by a `symbol`                         |
+| **Trip**        | `trip(wire)`, `power(wire, false)`               | Like a breaker: clears the latch and cuts every driver until it's released and driven again             |
+| **Bus**         | `buses` in a schematic                           | Wires where only one conducts at a time; a **pullup** member powers on when all are off                 |
+| **Schematic**   | `install(schematic)`, `createCircuit(schematic)` | Starting states and buses, installed into the circuit                                                   |
+| **Probe**       | `probe(wire, fn)`, `probeAll(fn)`                | A function that runs when a wire changes. Returns a function that detaches it                           |
+| **Edge**        | `measure(wire).edge`, `holdEdge(wire)`           | Where a wire is in its transition: `rising` or `falling`, then settled `on` or `off`                    |
+| **Connection**  | `connect(wire, …)`, `connections(wire)`          | A part, input, or receiver registered on a wire, for the overlay and for inputs to find their receivers |
 
 ## Using it
 
@@ -207,7 +207,7 @@ Docs: [try…finally](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Re
 
 ## Schematics: `install`
 
-`install(schematic)` is how `<GCircuit>` and `<GScope>` add wires and buses, and it returns an **uninstall** function. Installs are reference-counted. The first install of a wire applies its starting state, later ones only count, and the last uninstall forgets the wire, clearing its pending timers. Counting makes installing twice harmless, which matters because React's StrictMode mounts effects twice in development, and `GScope` will install during render as well as in an effect. A new bus calls `pullUp` once, which is how a pullup starts on.
+`install(schematic)` is how `<GCircuit>` and `<GDevice>` add wires and buses, and it returns an **uninstall** function. Installs are reference-counted. The first install of a wire applies its starting state, later ones only count, and the last uninstall forgets the wire, clearing its pending timers. Counting makes installing twice harmless, which matters because React's StrictMode mounts effects twice in development, and `GDevice` installs during render as well as in an effect. A new bus calls `pullUp` once, which is how a pullup starts on.
 
 ## Edges: `rising`, `falling`, and holds
 
@@ -219,9 +219,9 @@ off ──power on──▶ rising ──settles──▶ on ──power off─�
 
 `powered` changes at once, and `edge` says whether anything is still animating. CSS can then keep a closing element shown during `falling` (`hidden g-on:block g-falling:block`).
 
-**Who decides when an edge settles?** The loads that animate. A load reads its own transition time when the edge starts, calls `const done = circuit.holdEdge(wire)`, and calls `done()` when its transition ends. The edge settles when **both** of these are true:
+**Who decides when an edge settles?** The receivers that animate. A receiver reads its own transition time when the edge starts, calls `const done = circuit.holdEdge(wire)`, and calls `done()` when its transition ends. The edge settles when **both** of these are true:
 
-1. **One frame has passed** since it began. Loads take their holds while React commits, which is before the next frame, so a wire with no animated loads still gives them a chance. Then it settles on that frame.
+1. **One frame has passed** since it began. Receivers take their holds while React commits, which is before the next frame, so a wire with no animated receivers still gives them a chance. Then it settles on that frame.
 2. **Every hold is let go.**
 
 Each `Wire` keeps four fields for this:
@@ -250,7 +250,7 @@ Each `Wire` keeps four fields for this:
 
 ## Connections: the registry
 
-[`registry.ts`](../../src/core/registry.ts) records what is connected to each wire: parts, inputs, and loads, each with a `label` and, in the browser, its element. Every circuit includes one, so `circuit.connect(wire, connection)` returns a function that disconnects it, and `circuit.connections(wire)` lists them.
+[`registry.ts`](../../src/core/registry.ts) records what is connected to each wire: parts, inputs, and receivers, each with a `label` and, in the browser, its element. Every circuit includes one, so `circuit.connect(wire, connection)` returns a function that disconnects it, and `circuit.connections(wire)` lists them.
 
 It's kept apart from wire probes on purpose. Components connect when they mount, and if that counted as a wire change, every reader of the wire would re-render on every mount. Instead, `probeConnections` tells the overlay when the wiring changes. `connections` returns the same frozen array until that wire's connections change, so it's safe to use as a React snapshot too.
 

@@ -1,19 +1,19 @@
-# Triggers, scopes, and wire names
+# Triggers, scopes, and wire paths
 
 Three small parsers in `src/core/` turn the strings people write in JSX into plain data. They're pure functions: text in, frozen data out, and an `Error` naming the problem when the text is wrong. Being strict catches a malformed string at render, rather than leaving a button that silently does nothing. A well-formed but misspelled event, like `clik`, still parses: the browser just never fires it.
 
-## Wire names: `resolveWire`
+## Wire paths: `resolveWirePath`
 
-[`names.ts`](../../src/core/names.ts). Wire names are paths, like files in folders ([SPEC.md §6.3](../SPEC.md)). Inside `<GScope name="case-study">`, a plain name is local and a leading `/` reaches the app's root:
+[`names.ts`](../../src/core/names.ts). A component writes a **wire name**; the circuit keeps each wire under its **wire path**, like a file name and its path in folders ([SPEC.md §6.3](../SPEC.md)). Inside `<GDevice name="case-study">`, a plain name is **bundled** into the device, and a leading `/` reaches the app's root:
 
-| Call                                         | Result                       |
-| -------------------------------------------- | ---------------------------- |
-| `resolveWire('menu')`                        | `'menu'`                     |
-| `resolveWire('gallery', 'case-study')`       | `'case-study/gallery'`       |
-| `resolveWire('/theme', 'case-study')`        | `'theme'`                    |
-| `resolveWire('slide', 'case-study/gallery')` | `'case-study/gallery/slide'` |
+| Call                                             | Result                       |
+| ------------------------------------------------ | ---------------------------- |
+| `resolveWirePath('menu')`                        | `'menu'`                     |
+| `resolveWirePath('gallery', 'case-study')`       | `'case-study/gallery'`       |
+| `resolveWirePath('/theme', 'case-study')`        | `'theme'`                    |
+| `resolveWirePath('slide', 'case-study/gallery')` | `'case-study/gallery/slide'` |
 
-A nested scope's own name resolves the same way against its parent, which is how paths nest. Names with an empty part (`''`, `'menu/'`, `'a//b'`) throw.
+A nested device's own name resolves the same way against its parent device, which is how paths nest. Names with an empty part (`''`, `'menu/'`, `'a//b'`) throw.
 
 ## Breakpoint scopes: `parseScope`
 

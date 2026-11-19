@@ -13,7 +13,7 @@ export type {
 	WireProbe,
 	WireSpec,
 } from './circuit.js';
-export { resolveWire } from './names.js';
+export { resolveWirePath } from './names.js';
 export { createRegistry } from './registry.js';
 export type { Connection, ConnectionKind, Registry } from './registry.js';
 export { DEFAULT_BREAKPOINTS, parseScope } from './scope.js';
