@@ -1,17 +1,20 @@
 /**
- * Wire names are paths. Inside a scope, a plain name is local to it, and a leading `/` names a wire
- * from the app's root:
+ * A component names a wire relative to the device it's in. The circuit stores each wire under its
+ * path, which bundles the wire into every device around it:
  *
- * - `resolveWire('gallery', 'case-study')` is `'case-study/gallery'`
- * - `resolveWire('/theme', 'case-study')` is `'theme'`
+ * - `resolveWirePath('gallery', 'case-study')` is `'case-study/gallery'`, a bundled wire
+ * - `resolveWirePath('/theme', 'case-study')` is `'theme'`: a leading `/` names a wire from the root
+ * - `resolveWirePath('menu')` is `'menu'`: outside any device, the name is the path
  *
- * A scope's own name resolves the same way against its parent scope, so nested scopes nest paths.
+ * A device's own name resolves the same way against its parent device, so nested devices nest paths.
  */
-export function resolveWire(name: string, scope = ''): string {
-	const absolute = name.startsWith('/');
-	const path = absolute ? name.slice(1) : name;
+export function resolveWirePath(wireName: string, devicePath = ''): string {
+	const absolute = wireName.startsWith('/');
+	const path = absolute ? wireName.slice(1) : wireName;
 	if (path.split('/').includes('')) {
-		throw new Error(`Wire name "${name}" has an empty part. Use names like "menu" or "/theme".`);
+		throw new Error(
+			`Wire name "${wireName}" has an empty part. Use names like "menu" or "/theme".`,
+		);
 	}
-	return absolute || scope === '' ? path : `${scope}/${path}`;
+	return absolute || devicePath === '' ? path : `${devicePath}/${path}`;
 }

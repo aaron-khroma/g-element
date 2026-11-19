@@ -12,13 +12,13 @@ Settled with Aaron on 2026-11-12. Items marked **(spec)** change SPEC.md, which 
 | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | G1  | **Wire model: latch + drivers.** A wire is on while its _latch_ is set or any _driver_ is active. Latching writes (toggles, set/reset, rotary, `circuit.power`) are last-write-wins. Momentary drivers (hover triggers, `GHold`, relays, triode outputs) are ORed in. **(spec)** |
 | G2  | **Headless hooks first.** Each part is a hook (`useGSwitch` …) returning props to spread. Components (`<GSwitch as / asChild>`) are thin sugar over them. A virtual part is a hook used in your own component, or a logic-only component that renders `null`.                    |
-| G3  | **Loads are hook/ref spreads** (`useLoad(wire)`, `<GLoad asChild>`). React renders the `data-g-*` attributes, so the prerendered HTML is correct. There is no DOM scanning. **(spec: README example)**                                                                           |
+| G3  | **Receivers are hook/ref spreads** (`useReceiver(wire)`, `<GReceiver asChild>`). React renders the `data-g-*` attributes, so the prerendered HTML is correct. There is no DOM scanning. **(spec: README example)**                                                               |
 | G4  | **Configs are typed props**, each `true` or a breakpoint scope: `<GSwitch dismiss focusin noscroll="max-md">`. `trigger` stays a string mini-language.                                                                                                                           |
-| G5  | **Edges are per-wire and synchronized.** A wire stays `rising`/`falling` until every connected load finishes its transition, with a timer fallback. **(spec)**                                                                                                                   |
-| G6  | **Starting state is circuit-only.** `powered` and the initial `signal` are declared on `<GCircuit wires>` (or `<GScope wires>`), never on parts. **(spec)**                                                                                                                      |
+| G5  | **Edges are per-wire and synchronized.** A wire stays `rising`/`falling` until every connected receiver finishes its transition, with a timer fallback. **(spec)**                                                                                                               |
+| G6  | **Starting state is circuit-only.** `powered` and the initial `signal` are declared on `<GCircuit wires>` (or `<GDevice wires>`), never on parts. **(spec)**                                                                                                                     |
 | G7  | **Buses are circuit-level** too: `<GCircuit buses={{ nav: { wires: [...], pullup: 'program' } }}>`. **(spec)**                                                                                                                                                                   |
 | G8  | **Breakpoints use Tailwind semantics.** Stacked prefixes AND together (`md:max-lg:click`). Space-separated entries are independent and additive, and an unscoped entry always applies. **(spec)**                                                                                |
-| G9  | **Namespaces are path-style.** Inside `<GScope name="case-study">`, `wire="gallery"` is `case-study/gallery`, and `wire="/theme"` is the app's `theme`. Unprefixed names are always local. **(spec)**                                                                            |
+| G9  | **Wire paths are path-style.** Inside `<GDevice name="case-study">`, `wire="gallery"` is the bundled wire `case-study/gallery`, and `wire="/theme"` is the app's `theme`. Unprefixed names are always bundled into the nearest device. **(spec)**                                |
 
 **Proposed defaults (my calls; override any of these in review):**
 
@@ -57,7 +57,7 @@ interface Measurement {
 4. **Sustain-only drivers** (`GHold`) count only if the wire was already on when they asserted. A hold can keep a wire on, but never turn it on. That's QElement's `sustain` contract.
 5. **Trip** (P2). `trip(wire)`, or `power(wire, false)`, clears the latch and marks every active driver `cut`, like a breaker. A cut driver stops counting until it's released and asserted again.
 6. **Buses.** When any member's power rises, every other member is tripped. Deciding this is bus _arbitration_. When the last member's power falls and the bus has a `pullup`, the pullup's latch is set. At creation, the pullup starts on unless another member is declared `powered`. Two members declared `powered` is a dev error.
-7. **Edges.** A power change sets `rising` or `falling` and starts a new edge _generation_. Participants (loads with transitions) call `const done = circuit.holdEdge(wire)` during commit. The edge settles to `on`/`off` when every hold of the current generation is done. Core waits one frame before settling an edge with no holds, so loads get a chance to register. A reversal starts a new generation, and stale `done` calls are ignored. An edge is judged once per operation, so power that flips and flips back (a pullup re-latching) starts none, and wires powered by a schematic as it installs start settled, so starting states never animate.
+7. **Edges.** A power change sets `rising` or `falling` and starts a new edge _generation_. Participants (receivers with transitions) call `const done = circuit.holdEdge(wire)` during commit. The edge settles to `on`/`off` when every hold of the current generation is done. Core waits one frame before settling an edge with no holds, so receivers get a chance to register. A reversal starts a new generation, and stale `done` calls are ignored. An edge is judged once per operation, so power that flips and flips back (a pullup re-latching) starts none, and wires powered by a schematic as it installs start settled, so starting states never animate.
 
 `data-g-power` follows power **immediately**, and `data-g-edge` follows the phase. So `g-on:` matches during `rising` and `on`, and `g-falling:` is what keeps a closing element visible while it animates out (`hidden g-on:block g-falling:block`), as `power-down` did.
 
@@ -66,10 +66,10 @@ interface Measurement {
 ```
 src/core/
 ├── circuit.ts       createCircuit(): latch, drivers, signal, buses, edges (generations and holds), probes
-├── names.ts         resolveWire(name, scopePath): '/theme' → 'theme', 'gallery' + 'case-study' → 'case-study/gallery'
+├── names.ts         resolveWirePath(wireName, devicePath): '/theme' → 'theme', 'gallery' + 'case-study' → 'case-study/gallery'
 ├── trigger.ts       parseTrigger('max-md:click md:mouseleave|mouseenter') → TriggerEntry[]
 ├── scope.ts         parseScope('md:max-lg') → media query '(width >= 48rem) and (width < 64rem)'
-├── registry.ts      connections: which parts, inputs, and loads sit on each wire (for the overlay and aria-controls)
+├── registry.ts      connections: which parts, inputs, and receivers sit on each wire (for the overlay and aria-controls)
 └── index.ts
 ```
 
@@ -83,30 +83,30 @@ interface Schematic {
 
 interface Circuit {
 	// Reading
-	measure(wire: string): Measurement; // frozen and identity-stable until it changes (useSyncExternalStore-safe)
-	probe(wire: string, probe: () => void): () => void; // returns detach
-	probeAll(probe: (wire: string) => void): () => void; // overlay
+	measure(wirePath: string): Measurement; // frozen and identity-stable until it changes (useSyncExternalStore-safe)
+	probe(wirePath: string, probe: () => void): () => void; // returns detach
+	probeAll(probe: (wirePath: string) => void): () => void; // overlay
 
 	// Latching writes (the spec's escape hatch is `power`)
-	power(wire: string, on: boolean): void; // false = trip (P2)
-	trip(wire: string): void;
-	toggle(wire: string): void;
-	setSignal(wire: string, signal: Signal): void;
+	power(wirePath: string, on: boolean): void; // false = trip (P2)
+	trip(wirePath: string): void;
+	toggle(wirePath: string): void;
+	setSignal(wirePath: string, signal: Signal): void;
 
 	// Momentary drivers
-	drive(wire: string, driver: symbol, opts?: { signal?: string; sustainOnly?: boolean }): void;
-	release(wire: string, driver: symbol, opts?: { delay?: number }): void;
+	drive(wirePath: string, driver: symbol, opts?: { signal?: string; sustainOnly?: boolean }): void;
+	release(wirePath: string, driver: symbol, opts?: { delay?: number }): void;
 
 	// Edges
-	holdEdge(wire: string): () => void;
+	holdEdge(wirePath: string): () => void;
 
-	// Schematics (GCircuit at creation, GScope at render; reference-counted)
-	install(schematic: Schematic, scope?: string): () => void; // returns uninstall
+	// Schematics (GCircuit at creation, GDevice at render; reference-counted)
+	install(schematic: Schematic): () => void; // returns uninstall
 
 	// Registry
-	connect(wire: string, c: { kind: 'part' | 'input' | 'load'; label: string; element?: unknown }): () => void;
-	connections(wire: string): readonly Connection[];
-	probeConnections(probe: (wire: string) => void): () => void; // overlay redraws
+	connect(wirePath: string, c: { kind: 'part' | 'input' | 'receiver'; label: string; element?: unknown }): () => void;
+	connections(wirePath: string): readonly Connection[];
+	probeConnections(probe: (wirePath: string) => void): () => void; // overlay redraws
 }
 
 createCircuit(schematic?: Schematic, env?: { setTimeout; clearTimeout; requestFrame; cancelFrame }): Circuit;
@@ -131,10 +131,10 @@ action  := event                  // latching: the part's primary action
 ```
 src/react/
 ├── GCircuit.tsx      creates the circuit once (useState) from props: wires, buses, breakpoints
-├── GScope.tsx        name + wires + buses; installs its schematic during render (SSR) and in an effect (StrictMode re-mount)
-├── context.ts        circuit + current scope path
+├── GDevice.tsx       name + wires + buses; installs its schematic during render (SSR) and in an effect (StrictMode re-mount)
+├── context.ts        the board (circuit, breakpoint media, device installs) + current device path
 ├── hooks.ts          useCircuit, useWire, usePower, useSignal, useEdge (useSyncExternalStore + getServerSnapshot)
-├── load.ts           useLoad, <GLoad>: projection + edge participation
+├── receiver.tsx      useReceiver, <GReceiver>: projection + edge participation
 ├── settle.ts         transition tracking for edges (see below)
 ├── media.ts          breakpoint store: scope → MediaQueryList, read at event time, subscribable
 ├── listeners.ts      attaches native listeners for trigger strings via the ref callback
@@ -145,7 +145,7 @@ src/react/
 
 **Listeners are native, attached in the ref callback** (React 19 ref cleanup), not React `on*` props. Any DOM event name works (`focusin`, `pointerenter`, custom events), and breakpoint scopes are checked with `MediaQueryList.matches` when the event fires. Nothing is re-bound on resize. Disabled inputs are skipped.
 
-**Projection.** `useLoad(wire, opts)` returns:
+**Projection.** `useReceiver(wire, opts)` returns:
 
 ```ts
 { ref, 'data-g-power': 'on' | 'off', 'data-g-edge': Edge, 'data-g-signal'?: string, inert?: boolean }
@@ -153,7 +153,7 @@ src/react/
 
 `opts.inert` is `true` (inert while off or falling) or a scope (`'max-md'`). An unscoped `inert` is in the prerendered HTML. A **scoped** one can't be known at prerender, so it's applied after hydration. Hiding should come from CSS, so this only affects the moment before hydration.
 
-**Edge settling (`settle.ts`).** On edge start, each load's layout effect reads `getComputedStyle` (`transition-duration` + `transition-delay`, and `animation-*`). If the longest is 0, it doesn't hold the edge. Otherwise it takes a hold and releases it on the first of:
+**Edge settling (`settle.ts`).** On edge start, each receiver's layout effect reads `getComputedStyle` (`transition-duration` + `transition-delay`, and `animation-*`). If the longest is 0, it doesn't hold the edge. Otherwise it takes a hold and releases it on the first of:
 
 - `transitionend`/`animationend` with `event.target === event.currentTarget` (descendants' transitions bubble; this was a lesson from `q-dialog`) for the longest-running property, or
 - a fallback timer at the computed duration + 50 ms.
@@ -163,12 +163,12 @@ Reduced motion needs no special case: `motion-reduce:transition-none` gives 0 ms
 **Prerender and hydration rules:**
 
 - `GCircuit` creates the circuit from its schematic during render, so the static HTML reflects `powered`, `signal`, and pullups (G6, G7).
-- `GScope` installs its schematic during render, so its subtree prerenders correctly. Reading a scoped wire from _outside and above_ its scope can't be prerender-correct, and a dev warning covers it.
+- `GDevice` installs its schematic during render, so its subtree prerenders correctly. Reading a bundled wire from _outside and above_ its device can't be prerender-correct, and a dev warning covers it.
 - Anything browser-dependent (breakpoint scopes, `aria-controls` ids, the overlay) appears after hydration.
 
 ## 5. Parts
 
-All hooks take resolved-at-render wire names (scope applied) and register their input element in the registry via the returned `ref`.
+All hooks take wire names, resolve them to wire paths at render (bundled into the current device), and register their input element in the registry via the returned `ref`.
 
 | Part (hook → component)                | Returns / renders                                                            | Latching action                    | Momentary (`off\|on`)                                 | ARIA                                                                                                                                                        |
 | -------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -185,18 +185,18 @@ All hooks take resolved-at-render wire names (scope applied) and register their 
 
 ## 6. Configs: QElement → GElement
 
-| QElement                                            | GElement v0.1                                                                                                                                                                                                                                                                                                                                                                                                                               | When    |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `dismiss`                                           | `GSwitch` prop. Escape in the input or any load on the wire → trip, refocus the input. Focus leaving input + loads (checked in the next frame) → trip without refocus. Guards carried over as _behavior_: ignore while a pointer is down on the input (Safari/Firefox don't focus clicked buttons), treat focus returning to the input as inside, and do nothing if the wire is already off (so nested panels don't close their ancestors). | Phase 2 |
-| `focusin`                                           | `GSwitch` prop. On power-on, after commit (so `inert` is gone), focus the first tabbable descendant of the first load in DOM order, skipping `tabindex="-1"`, with `preventScroll`.                                                                                                                                                                                                                                                         | Phase 2 |
-| `noscroll`                                          | `GSwitch` prop (`true` or a scope). A claim is tied to the **wire's power**, not the part instance, so any power-off path releases it (the `q-dialog` leak can't happen). One root-level effect locks `documentElement` overflow while any claimed wire is on and its scope matches, and re-evaluates on breakpoint changes.                                                                                                                | Phase 2 |
-| `notab`, `tabhide`                                  | `useLoad(wire, { inert })`                                                                                                                                                                                                                                                                                                                                                                                                                  | Phase 2 |
-| `loadin`                                            | `everPowered` in wire state: the consumer renders media once it's true                                                                                                                                                                                                                                                                                                                                                                      | Phase 2 |
-| `store`                                             | wire spec `{ store: 'local' \| 'session' }`, restored after hydration (one re-render; documented flash). Unused by the landpage (D7).                                                                                                                                                                                                                                                                                                       | Later   |
-| `cascade`                                           | wire spec `{ parent: 'menu' }`: tripping a parent trips its children                                                                                                                                                                                                                                                                                                                                                                        | Later   |
-| `scrollto`                                          | `GSwitch` prop, `scrollIntoView({ block: 'nearest' })` on the first load                                                                                                                                                                                                                                                                                                                                                                    | Later   |
-| `fliptext`, `checkbox`, `switch`, `anim`            | Replaced by rendering from `usePower` and by `aria="switch"`; SVG animation is CSS's job                                                                                                                                                                                                                                                                                                                                                    | Dropped |
-| `link`, `sync`, `nomodal`, `onlyadd`, `closedialog` | App or Shopify specific. Use a real `<a>`, or app code with `useCircuit()`.                                                                                                                                                                                                                                                                                                                                                                 | Dropped |
+| QElement                                            | GElement v0.1                                                                                                                                                                                                                                                                                                                                                                                                                                       | When    |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `dismiss`                                           | `GSwitch` prop. Escape in the input or any receiver on the wire → trip, refocus the input. Focus leaving input + receivers (checked in the next frame) → trip without refocus. Guards carried over as _behavior_: ignore while a pointer is down on the input (Safari/Firefox don't focus clicked buttons), treat focus returning to the input as inside, and do nothing if the wire is already off (so nested panels don't close their ancestors). | Phase 2 |
+| `focusin`                                           | `GSwitch` prop. On power-on, after commit (so `inert` is gone), focus the first tabbable descendant of the first receiver in DOM order, skipping `tabindex="-1"`, with `preventScroll`.                                                                                                                                                                                                                                                             | Phase 2 |
+| `noscroll`                                          | `GSwitch` prop (`true` or a scope). A claim is tied to the **wire's power**, not the part instance, so any power-off path releases it (the `q-dialog` leak can't happen). One root-level effect locks `documentElement` overflow while any claimed wire is on and its scope matches, and re-evaluates on breakpoint changes.                                                                                                                        | Phase 2 |
+| `notab`, `tabhide`                                  | `useReceiver(wire, { inert })`                                                                                                                                                                                                                                                                                                                                                                                                                      | Phase 2 |
+| `loadin`                                            | `everPowered` in wire state: the consumer renders media once it's true                                                                                                                                                                                                                                                                                                                                                                              | Phase 2 |
+| `store`                                             | wire spec `{ store: 'local' \| 'session' }`, restored after hydration (one re-render; documented flash). Unused by the landpage (D7).                                                                                                                                                                                                                                                                                                               | Later   |
+| `cascade`                                           | wire spec `{ parent: 'menu' }`: tripping a parent trips its children                                                                                                                                                                                                                                                                                                                                                                                | Later   |
+| `scrollto`                                          | `GSwitch` prop, `scrollIntoView({ block: 'nearest' })` on the first receiver                                                                                                                                                                                                                                                                                                                                                                        | Later   |
+| `fliptext`, `checkbox`, `switch`, `anim`            | Replaced by rendering from `usePower` and by `aria="switch"`; SVG animation is CSS's job                                                                                                                                                                                                                                                                                                                                                            | Dropped |
+| `link`, `sync`, `nomodal`, `onlyadd`, `closedialog` | App or Shopify specific. Use a real `<a>`, or app code with `useCircuit()`.                                                                                                                                                                                                                                                                                                                                                                         | Dropped |
 
 ## 7. Breakpoints and Tailwind
 
@@ -230,7 +230,7 @@ Each step is one PR into `prime`, with a changeset where behavior changes.
 
 1. **`core`: the wire.** Latch, drivers, signal resolution, trip, release delays, sustain-only, schematics, buses and pullup, `env` injection, and the core purity lint. Rewrites the scaffold test.
 2. **`core`: edges, names, triggers, scopes, and the registry.**
-3. **`react`: foundation.** `GCircuit`, `GScope`, reader hooks, `useLoad`/`GLoad`, `settle.ts`, `media.ts`, `listeners.ts`, `Slot`, and prerender tests.
+3. **`react`: foundation.** `GCircuit`, `GDevice`, reader hooks, `useReceiver`/`GReceiver`, `settle.ts`, `media.ts`, `listeners.ts`, `Slot`, and prerender tests.
 4. **Parts:** `GSwitch`, `GSignal`, `GHold`, `GRotary`, `GDisplay`.
 5. **Configs:** `dismiss`, `focusin`, `noscroll`, scoped `inert`.
 6. **The Tailwind plugin.**
@@ -248,4 +248,4 @@ Each step is one PR into `prime`, with a changeset where behavior changes.
 | Q1  | **Typed wire names:** a `Register` interface (the TanStack Router pattern), so `wire="mnu"` is a type error in apps that opt in                                       | Nice-to-have |
 | Q2  | **Document-level inputs** ("a key" in the spec's Input definition): e.g. `trigger="window:keydown"` with a key filter, which would give a bare `<GSwitch>` a real use | When needed  |
 | Q3  | **MElement hooks into edges:** confirm in Phase 3 that "matrix transition timing" works as `holdEdge` participants, not a core change                                 | Phase 3      |
-| Q4  | **Gridmap schematics:** how Gridiv's JSON describes a gridmap's `wires`/`buses` for its `GScope` (schema lives in Gridiv)                                             | Phase 5      |
+| Q4  | **Gridmap schematics:** how Gridiv's JSON describes a gridmap's `wires`/`buses` for its `GDevice` (schema lives in Gridiv)                                            | Phase 5      |

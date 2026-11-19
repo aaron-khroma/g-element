@@ -6,11 +6,12 @@ What GElement _is_ and how its API is designed lives in [SPEC.md](../SPEC.md); s
 
 ## Guides
 
-| Guide                                                        | Covers                                                                       |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| [The circuit store](circuit-store.md)                        | `createCircuit()`: wires, drivers, buses, and how probes are told of changes |
-| [Triggers, scopes, and wire names](triggers-scopes-names.md) | The parsers behind `trigger="…"`, breakpoint scopes, and path-style names    |
-| [Publishing to npm](publishing.md)                           | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing   |
+| Guide                                                        | Covers                                                                          |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [The circuit store](circuit-store.md)                        | `createCircuit()`: wires, drivers, buses, and how probes are told of changes    |
+| [Triggers, scopes, and wire paths](triggers-scopes-names.md) | The parsers behind `trigger="…"`, breakpoint scopes, and wire paths             |
+| [The React layer](react-layer.md)                            | `<GCircuit>`, `<GDevice>`, reader hooks, receivers, prerendering, and hydration |
+| [Publishing to npm](publishing.md)                           | ESM output, the `exports` map, Changesets, release PRs, Trusted Publishing      |
 
 Add a guide when a system gets big enough to need a walkthrough, and link it from the map below.
 
@@ -20,14 +21,23 @@ Add a guide when a system gets big enough to need a walkthrough, and link it fro
 g-element/
 ├── src/                      The library's TypeScript source
 │   ├── index.ts              Root entry point: re-exports everything public
+│   ├── react/                React components and hooks over the circuit store
+│   │   ├── GCircuit.tsx      Provides one circuit per tree, built from its schematic
+│   │   ├── GDevice.tsx       Devices: bundled wires with their own schematic
+│   │   ├── hooks.ts          usePower, useSignal, useEdge, useWire, useCircuit
+│   │   ├── receiver.tsx      useReceiver and <GReceiver>: data-g-* attributes and edge holds
+│   │   ├── settle.ts         Holds edges while CSS transitions run
+│   │   ├── listeners.ts      Native listeners for trigger strings
+│   │   ├── media.ts          Breakpoint scopes, answered by matchMedia
+│   │   └── slot.tsx          asChild: passes props to the child element
 │   └── core/                 The circuit store: plain TypeScript, no React, no DOM
 │       ├── index.ts          The `@styleeyes/g-element/core` entry point
 │       ├── circuit.ts        createCircuit(): wires, drivers, buses, edges, probes
 │       ├── registry.ts       What's connected to each wire
-│       ├── names.ts          resolveWire(): path-style wire names
+│       ├── names.ts          resolveWirePath(): wire names → wire paths
 │       ├── scope.ts          parseScope(): breakpoint scope → media query
 │       ├── trigger.ts        parseTrigger(): trigger strings → entries
-│       └── *.test.ts         Unit tests, beside the file they test
+│       └── *.test.ts         Unit tests, beside the file they test (React's: *.test.tsx)
 ├── dist/                     Build output (git-ignored): .js, .d.ts, and source maps
 ├── docs/                     SPEC.md (the design) and this guide
 ├── .changeset/               Changesets config, plus pending release notes
@@ -35,7 +45,12 @@ g-element/
 └── tsconfig*.json, *.config.*  TypeScript, Vitest, ESLint, Prettier
 ```
 
-`src/react/` (parts and hooks) and `src/overlay/` (the dev tool) arrive with v0.1; see [SPEC.md §2](../SPEC.md#2-architecture).
+The parts (`src/react/parts/`) and `src/overlay/` (the dev tool) arrive with v0.1; see [SPEC.md §2](../SPEC.md#2-architecture).
+
+### The React layer: `src/react/`
+
+Components and hooks over the circuit store. Concepts: context, `useState` initializers, `useSyncExternalStore`, `useId`, layout effects, ref callbacks with cleanup, `asChild` slots, prerendering, and hydration.
+Guide: [The React layer](react-layer.md)
 
 ### The public API: `package.json` and `src/index.ts`
 
@@ -70,6 +85,8 @@ Guide: [The circuit store](circuit-store.md)
 - **Vitest** runs the tests in `src/**/*.test.ts`, next to the code they test.
 - **`globals: true`** makes `describe`, `it`, `expect`, and `vi` available without importing them; `"types": ["vitest/globals"]` in `tsconfig.json` tells TypeScript about them.
 - **`environment: 'jsdom'`** gives tests a simulated browser DOM, ready for the React parts.
+- **React Testing Library** renders components into that DOM (`render`, `renderHook`), and `act()` makes React finish every update before the test looks. Docs: [React Testing Library](https://testing-library.com/docs/react-testing-library/intro/), [`act`](https://react.dev/reference/react/act)
+- **`// @vitest-environment node`** at the top of a test file runs it without a DOM, as [`prerender.test.tsx`](../../src/react/prerender.test.tsx) does to prove prerendering never touches the browser.
 - **`vi.fn()`** makes a spy: a stand-in function that records its calls, so a test can assert `toHaveBeenCalledTimes(1)`. See the notification tests in [`circuit.test.ts`](../../src/core/circuit.test.ts).
 
 Docs: [Vitest guide](https://vitest.dev/guide/), [config](https://vitest.dev/config/), [`vi`](https://vitest.dev/api/vi.html)

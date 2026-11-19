@@ -9,9 +9,9 @@
 	<GSwitch wire="menu" as="button">
 		Menu
 	</GSwitch>
-	<GLoad wire="menu" asChild>
+	<GReceiver wire="menu" asChild>
 		<nav className="hidden g-on:block">…</nav>
-	</GLoad>
+	</GReceiver>
 </GCircuit>
 ```
 

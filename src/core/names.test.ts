@@ -1,25 +1,28 @@
-import { resolveWire } from './names.js';
+import { resolveWirePath } from './names.js';
 
-describe('resolveWire', () => {
-	it('keeps a plain name as is outside any scope', () => {
-		expect(resolveWire('menu')).toBe('menu');
+describe('resolveWirePath', () => {
+	it('uses a plain name as the path outside any device', () => {
+		expect(resolveWirePath('menu')).toBe('menu');
 	});
 
-	it('makes a plain name local to its scope', () => {
-		expect(resolveWire('gallery', 'case-study')).toBe('case-study/gallery');
+	it('bundles a plain name into its device', () => {
+		expect(resolveWirePath('gallery', 'case-study')).toBe('case-study/gallery');
 	});
 
-	it('nests scopes', () => {
-		const scope = resolveWire('gallery', 'case-study');
-		expect(resolveWire('slide', scope)).toBe('case-study/gallery/slide');
+	it('nests devices', () => {
+		const device = resolveWirePath('gallery', 'case-study');
+		expect(resolveWirePath('slide', device)).toBe('case-study/gallery/slide');
 	});
 
-	it('reads a leading slash as the app root, inside any scope', () => {
-		expect(resolveWire('/theme', 'case-study/gallery')).toBe('theme');
-		expect(resolveWire('/case-study/gallery')).toBe('case-study/gallery');
+	it('reads a leading slash as the app root, inside any device', () => {
+		expect(resolveWirePath('/theme', 'case-study/gallery')).toBe('theme');
+		expect(resolveWirePath('/case-study/gallery')).toBe('case-study/gallery');
 	});
 
-	it.each(['', '/', 'menu/', 'a//b', '//theme'])('rejects %j, which has an empty part', (name) => {
-		expect(() => resolveWire(name, 'scope')).toThrow(/empty part/);
-	});
+	it.each(['', '/', 'menu/', 'a//b', '//theme'])(
+		'rejects %j, which has an empty part',
+		(wireName) => {
+			expect(() => resolveWirePath(wireName, 'device')).toThrow(/empty part/);
+		},
+	);
 });

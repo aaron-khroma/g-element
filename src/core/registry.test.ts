@@ -5,7 +5,7 @@ describe('registry', () => {
 	it('lists connections in the order they were made', () => {
 		const registry = createRegistry();
 		registry.connect('menu', { kind: 'input', label: 'Menu button' });
-		registry.connect('menu', { kind: 'load', label: 'nav' });
+		registry.connect('menu', { kind: 'receiver', label: 'nav' });
 		expect(registry.connections('menu').map((c) => c.label)).toEqual(['Menu button', 'nav']);
 	});
 
@@ -13,7 +13,7 @@ describe('registry', () => {
 		const registry = createRegistry();
 		const empty = registry.connections('menu');
 		expect(registry.connections('other')).toBe(empty);
-		registry.connect('menu', { kind: 'load', label: 'nav' });
+		registry.connect('menu', { kind: 'receiver', label: 'nav' });
 		const one = registry.connections('menu');
 		expect(one).not.toBe(empty);
 		expect(registry.connections('menu')).toBe(one);
@@ -22,7 +22,7 @@ describe('registry', () => {
 
 	it('disconnects only the connection it made, once', () => {
 		const registry = createRegistry();
-		const same = { kind: 'load', label: 'nav' } as const;
+		const same = { kind: 'receiver', label: 'nav' } as const;
 		const first = registry.connect('menu', same);
 		registry.connect('menu', same);
 		first();
@@ -46,7 +46,7 @@ describe('registry', () => {
 		const circuit = createCircuit();
 		const wireProbe = vi.fn();
 		circuit.probeAll(wireProbe);
-		circuit.connect('menu', { kind: 'load', label: 'nav' });
+		circuit.connect('menu', { kind: 'receiver', label: 'nav' });
 		expect(circuit.connections('menu')).toHaveLength(1);
 		expect(wireProbe).not.toHaveBeenCalled();
 	});
